@@ -9,15 +9,16 @@ from datetime import datetime, timedelta
 st.set_page_config("Feedback Analytics", layout="wide", page_icon="📊")
 init_db()
 
-# Define pastel color scheme
-PASTEL_COLORS = {
-    "positive": "#A1DE93",  # Pastel green
-    "negative": "#FF9AA2",  # Pastel pink
-    "chat": "#B5EAD7",      # Pastel mint
-    "prescription": "#FFB7B2",  # Pastel peach
-    "background": "#F5F5F5",
-    "text": "#333333",
-    "header": "#6C63FF"     # Pastel purple
+# Define dynamic color scheme that works in both light and dark modes
+COLORS = {
+    "positive": "#4CAF50",  # Green
+    "negative": "#F44336",  # Red
+    "chat": "#2196F3",      # Blue
+    "prescription": "#FF9800",  # Orange
+    "background": "var(--background-color)",
+    "text": "var(--text-color)",
+    "header": "#9C27B0",    # Purple
+    "card": "var(--card-background-color)"
 }
 
 def fetch_feedback():
@@ -95,12 +96,17 @@ with main_col1:
         df, 
         names='type',
         color='type',
-        color_discrete_map={'chat': PASTEL_COLORS['chat'], 
-                          'prescription': PASTEL_COLORS['prescription']},
+        color_discrete_map={'chat': COLORS['chat'], 
+                          'prescription': COLORS['prescription']},
         hole=0.4
     )
     type_fig.update_traces(textposition='inside', textinfo='percent+label')
-    type_fig.update_layout(showlegend=False)
+    type_fig.update_layout(
+        showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['text'])
+    )
     st.plotly_chart(type_fig, use_container_width=True)
     
     # Weekly Feedback Trend
@@ -114,12 +120,19 @@ with main_col1:
             color='type',
             barmode='group',
             color_discrete_map={
-                'chat': PASTEL_COLORS['chat'],
-                'prescription': PASTEL_COLORS['prescription']
+                'chat': COLORS['chat'],
+                'prescription': COLORS['prescription']
             },
             labels={'count': 'Feedback Count', 'week': 'Week'}
         )
         trend_fig.update_xaxes(tickformat="%b %d")
+        trend_fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['text']),
+            xaxis=dict(color=COLORS['text']),
+            yaxis=dict(color=COLORS['text'])
+        )
         st.plotly_chart(trend_fig, use_container_width=True)
     else:
         st.info("No data available for weekly trends")
@@ -132,12 +145,17 @@ with main_col2:
         path=['type', 'feedback_type'],
         color='feedback_type',
         color_discrete_map={
-            'positive': PASTEL_COLORS['positive'],
-            'negative': PASTEL_COLORS['negative']
+            'positive': COLORS['positive'],
+            'negative': COLORS['negative']
         },
         hover_data=['type']
     )
-    sentiment_fig.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+    sentiment_fig.update_layout(
+        margin=dict(t=0, b=0, l=0, r=0),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['text'])
+    )
     st.plotly_chart(sentiment_fig, use_container_width=True)
     
     # Feedback by User
@@ -152,15 +170,25 @@ with main_col2:
             x=user_feedback.index,
             y=user_feedback.get('positive', 0),
             name='Positive',
-            marker_color=PASTEL_COLORS['positive']
+            marker_color=COLORS['positive']
         ))
         user_fig.add_trace(go.Bar(
             x=user_feedback.index,
             y=user_feedback.get('negative', 0),
             name='Negative',
-            marker_color=PASTEL_COLORS['negative']
+            marker_color=COLORS['negative']
         ))
-        user_fig.update_layout(barmode='stack', xaxis_title="User", yaxis_title="Feedback Count")
+        user_fig.update_layout(
+            barmode='stack', 
+            xaxis_title="User", 
+            yaxis_title="Feedback Count",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['text']),
+            xaxis=dict(color=COLORS['text']),
+            yaxis=dict(color=COLORS['text']),
+            legend=dict(font=dict(color=COLORS['text']))
+        )
         st.plotly_chart(user_fig, use_container_width=True)
     else:
         st.info("No user feedback data available")
@@ -181,7 +209,12 @@ with tab1:
             fig = px.pie(
                 values=chat_sentiment.values,
                 names=chat_sentiment.index.map({1: 'Positive', 0: 'Negative'}),
-                color_discrete_sequence=[PASTEL_COLORS['positive'], PASTEL_COLORS['negative']]
+                color_discrete_sequence=[COLORS['positive'], COLORS['negative']]
+            )
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['text'])
             )
             st.plotly_chart(fig, use_container_width=True)
         
@@ -192,7 +225,14 @@ with tab1:
                 top_users, 
                 orientation='v',
                 labels={'index': 'User', 'value': 'Feedback Count'},
-                color_discrete_sequence=[PASTEL_COLORS['chat']]
+                color_discrete_sequence=[COLORS['chat']]
+            )
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['text']),
+                xaxis=dict(color=COLORS['text']),
+                yaxis=dict(color=COLORS['text'])
             )
             st.plotly_chart(fig, use_container_width=True)
         
@@ -207,7 +247,8 @@ with tab1:
                 'username': 'User',
                 'feedback': 'Feedback'
             }),
-            hide_index=True
+            hide_index=True,
+            use_container_width=True
         )
     else:
         st.info("No chat feedback available")
@@ -222,7 +263,12 @@ with tab2:
             fig = px.pie(
                 values=presc_sentiment.values,
                 names=presc_sentiment.index.map({1: 'Positive', 0: 'Negative'}),
-                color_discrete_sequence=[PASTEL_COLORS['positive'], PASTEL_COLORS['negative']]
+                color_discrete_sequence=[COLORS['positive'], COLORS['negative']]
+            )
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['text'])
             )
             st.plotly_chart(fig, use_container_width=True)
         
@@ -233,7 +279,14 @@ with tab2:
                 top_users, 
                 orientation='v',
                 labels={'index': 'User', 'value': 'Feedback Count'},
-                color_discrete_sequence=[PASTEL_COLORS['prescription']]
+                color_discrete_sequence=[COLORS['prescription']]
+            )
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['text']),
+                xaxis=dict(color=COLORS['text']),
+                yaxis=dict(color=COLORS['text'])
             )
             st.plotly_chart(fig, use_container_width=True)
         
@@ -248,56 +301,75 @@ with tab2:
                 'username': 'User',
                 'feedback': 'Feedback'
             }),
-            hide_index=True
+            hide_index=True,
+            use_container_width=True
         )
     else:
         st.info("No prescription feedback available")
 
-# Apply custom styling
+# Apply dynamic styling that works with dark mode
 st.markdown(f"""
 <style>
-    /* Main background */
-    .stApp {{
-        background-color: {PASTEL_COLORS['background']};
-    }}
-    
-    /* Headers */
-    h1, h2, h3, h4, h5, h6 {{
-        color: {PASTEL_COLORS['header']} !important;
+    /* Use Streamlit's theme variables */
+    :root {{
+        --background-color: var(--background-color);
+        --text-color: var(--text-color);
+        --card-background-color: var(--secondary-background-color);
     }}
     
     /* Metric cards */
     [data-testid="stMetric"] {{
-        background-color: white;
+        background-color: var(--card-background-color);
         border-radius: 12px;
         padding: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid var(--border-color);
+    }}
+    
+    [data-testid="stMetricValue"] {{
+        color: var(--text-color) !important;
+    }}
+    
+    [data-testid="stMetricLabel"] {{
+        color: var(--text-color) !important;
     }}
     
     /* Tabs */
     [data-baseweb="tab"] {{
-        background-color: white !important;
+        background-color: var(--card-background-color) !important;
         border-radius: 8px !important;
         margin: 5px !important;
         padding: 10px 15px !important;
+        border: 1px solid var(--border-color) !important;
     }}
     
     [data-baseweb="tab"][aria-selected="true"] {{
-        background-color: {PASTEL_COLORS['chat']} !important;
-        color: {PASTEL_COLORS['text']} !important;
+        background-color: {COLORS['chat']} !important;
+        color: white !important;
         font-weight: bold;
     }}
     
     /* Dataframes */
     .dataframe {{
+        background-color: var(--card-background-color) !important;
+        color: var(--text-color) !important;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid var(--border-color);
+    }}
+    
+    /* Table text color */
+    .dataframe th, .dataframe td {{
+        color: var(--text-color) !important;
     }}
     
     /* Dividers */
     hr {{
         margin: 2rem 0;
-        border-top: 2px solid {PASTEL_COLORS['prescription']};
+        border-top: 2px solid {COLORS['prescription']};
+    }}
+    
+    /* Plotly chart background */
+    .js-plotly-plot .plotly {{
+        background: transparent !important;
     }}
 </style>
 """, unsafe_allow_html=True)
