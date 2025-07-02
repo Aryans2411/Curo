@@ -1,0 +1,734 @@
+import streamlit as st
+import tempfile
+import hashlib
+import subprocess
+import json
+import re
+import datetime
+import time
+from db import SessionLocal, User, Conversation, ChatFeedback, PrescriptionFeedback, init_db
+from sqlalchemy.exc import IntegrityError
+from tavily_api import get_health_articles, get_medicine_links
+from PIL import Image
+import io
+import re
+
+def clean_assistant_message(text):
+    # Remove any code blocks: triple backticks and their content
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    # Remove HTML tags (like <div>...</div>)
+    text = re.sub(r"</?div[^>]*>", "", text)
+    text = re.sub(r"</?span[^>]*>", "", text)
+    # Remove any 'class="timestamp"' or similar
+    text = re.sub(r'class="[^"]*"', "", text)
+    # Remove leading/trailing whitespace
+    text = text.strip()
+    return text
+
+
+init_db()
+st.set_page_config(page_title="Curo Health Assistant", layout="wide", page_icon="🩺")
+
+# Enhanced CSS with dark mode support
+st.markdown("""
+<style>
+:root {
+    --primary: #4361ee;
+    --secondary: #3f37c9;
+    --accent: #4895ef;
+    --success: #4cc9f0;
+    --user-bubble: #4361ee;
+    --sidebar-bg: #3a0ca3;
+    --sidebar-hover: #7209b7;
+    --sidebar-active: #f72585;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --text: #f0f2f6;
+        --light: #1a1a2e;
+        --bot-bubble: #2d3748;
+    }
+    .article-list {
+        background: linear-gradient(135deg, #1e3a8a, #1e40af) !important;
+    }
+}
+
+/* Light mode */
+@media (prefers-color-scheme: light) {
+    :root {
+        --text: #333333;
+        --light: #f8f9fa;
+        --bot-bubble: #f0f4f8;
+    }
+}
+
+/* Global text color */
+body {
+    color: var(--text) !important;
+}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background-color: var(--sidebar-bg) !important;
+    padding: 1rem;
+    color: white !important;
+}
+
+[data-testid="stSidebar"] .stRadio label {
+    color: white !important;
+    font-weight: 500;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    transition: all 0.3s ease;
+}
+
+[data-testid="stSidebar"] .stRadio label:hover {
+    background-color: var(--sidebar-hover) !important;
+}
+
+[data-testid="stSidebar"] .stRadio [aria-checked="true"] + div label {
+    background-color: var(--sidebar-active) !important;
+    color: white !important;
+}
+
+/* Session ID header */
+.session-header {
+    background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
+    color: white !important;
+    border-radius: 12px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 1.5rem !important;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Buttons */
+.stButton>button {
+    background-color: var(--accent) !important;
+    color: white !important;
+    border-radius: 8px !important;
+    border: none !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+}
+
+.stButton>button:hover {
+    background-color: var(--secondary) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Feedback buttons */
+.feedback-btn {
+    background: none !important;
+    border: 2px solid var(--accent) !important;
+    color: var(--accent) !important;
+    font-size: 1.2rem !important;
+    padding: 0.25rem 1rem !important;
+}
+
+.feedback-btn:hover {
+    background-color: var(--accent) !important;
+    color: white !important;
+}
+
+/* Articles styling */
+.article-list {
+    background: linear-gradient(135deg, #f0f9ff, #e6f7ff) !important;
+    border-radius: 12px !important;
+    padding: 1rem !important;
+    margin: 1rem 0 !important;
+    border-left: 4px solid var(--accent) !important;
+}
+
+.article-item {
+    padding: 0.5rem 0 !important;
+    border-bottom: 1px dashed #cbd5e0 !important;
+    color: var(--text) !important;
+}
+
+/* Dark mode specific adjustments */
+@media (prefers-color-scheme: dark) {
+    .article-list {
+        background: linear-gradient(135deg, #1e3a8a, #1e40af) !important;
+    }
+    .article-item {
+        color: #e2e8f0 !important;
+    }
+}
+
+/* Ensure all text is visible in dark mode */
+p, h1, h2, h3, h4, h5, h6, div, span {
+    color: var(--text) !important;
+}
+
+/* NEW: Clean chat bubbles */
+.user-message {
+    text-align: right;
+    margin-bottom: 15px;
+}
+.user-bubble {
+    background-color: #4361ee;
+    color: white;
+    border-radius: 18px 18px 4px 18px;
+    padding: 12px 16px;
+    display: inline-block;
+    margin-bottom: 2px;
+    max-width: 80%;
+}
+.bot-message {
+    text-align: left;
+    margin-bottom: 15px;
+}
+.bot-bubble {
+    background-color: #2d3748;
+    color: #f0f2f6;
+    border-radius: 18px 18px 18px 4px;
+    padding: 12px 16px;
+    display: inline-block;
+    margin-bottom: 2px;
+    max-width: 80%;
+}
+.timestamp {
+    color: #777;
+    font-size: 0.8em;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# --------- Utility functions ---------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(username, password):
+    db = SessionLocal()
+    hashed_pwd = hash_password(password)
+    user = User(username=username, password=hashed_pwd)
+    db.add(user)
+    try:
+        db.commit()
+        return True, "User registered successfully."
+    except IntegrityError:
+        db.rollback()
+        return False, "Username already exists."
+    finally:
+        db.close()
+
+def login_user(username, password):
+    db = SessionLocal()
+    hashed_pwd = hash_password(password)
+    user = db.query(User).filter_by(username=username, password=hashed_pwd).first()
+    db.close()
+    return user
+
+def get_user_profile(user_id):
+    db = SessionLocal()
+    user = db.query(User).filter_by(id=user_id).first()
+    db.close()
+    return user
+
+def update_user_profile(user_id, age, gender, conditions, allergies, medications):
+    db = SessionLocal()
+    user = db.query(User).filter_by(id=user_id).first()
+    user.age = age
+    user.gender = gender
+    user.conditions = conditions
+    user.allergies = allergies
+    user.medications = medications
+    db.commit()
+    db.close()
+
+def save_conversation(user_id, message, response):
+    db = SessionLocal()
+    new_conv = Conversation(user_id=user_id, message=message, response=response)
+    db.add(new_conv)
+    db.commit()
+    db.close()
+
+def load_conversation(user_id, limit=5):
+    db = SessionLocal()
+    history = db.query(Conversation).filter_by(user_id=user_id).order_by(Conversation.timestamp).all()
+    db.close()
+    return history[-limit:]
+
+def downscale_image(file_bytes, max_dim=800):
+    image = Image.open(io.BytesIO(file_bytes))
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.thumbnail((max_dim, max_dim))
+    buf = io.BytesIO()
+    image.save(buf, format='JPEG')
+    return buf.getvalue()
+
+def extract_medicine_names(text):
+    meds = set(re.findall(r'\*\*\s*([A-Za-z0-9\s-]{2,})\s*\*\*', text))
+    if not meds:
+        meds = set(re.findall(r'-\s*([A-Za-z0-9\s-]{2,})', text))
+    return list(meds)
+
+def save_chat_feedback(user_id, question, answer, value):
+    db = SessionLocal()
+    feedback = ChatFeedback(user_id=user_id, question=question, answer=answer, feedback=value)
+    db.add(feedback)
+    db.commit()
+    db.close()
+
+def save_prescription_feedback(user_id, filename, result, value):
+    db = SessionLocal()
+    feedback = PrescriptionFeedback(user_id=user_id, filename=filename, result=result, feedback=value)
+    db.add(feedback)
+    db.commit()
+    db.close()
+
+# ------ Analytics Dashboard ------
+def get_feedback_stats():
+    db = SessionLocal()
+    chat_total = db.query(ChatFeedback).count()
+    chat_pos = db.query(ChatFeedback).filter_by(feedback=1).count()
+    chat_neg = db.query(ChatFeedback).filter_by(feedback=0).count()
+    presc_total = db.query(PrescriptionFeedback).count()
+    presc_pos = db.query(PrescriptionFeedback).filter_by(feedback=1).count()
+    presc_neg = db.query(PrescriptionFeedback).filter_by(feedback=0).count()
+    db.close()
+    return {
+        "chat_total": chat_total, "chat_pos": chat_pos, "chat_neg": chat_neg,
+        "presc_total": presc_total, "presc_pos": presc_pos, "presc_neg": presc_neg
+    }
+
+def get_recent_chat_feedback(limit=10):
+    db = SessionLocal()
+    rows = db.query(ChatFeedback).order_by(ChatFeedback.id.desc()).limit(limit).all()
+    db.close()
+    return rows
+
+def get_recent_presc_feedback(limit=10):
+    db = SessionLocal()
+    rows = db.query(PrescriptionFeedback).order_by(PrescriptionFeedback.id.desc()).limit(limit).all()
+    db.close()
+    return rows
+
+# ------ Buy medicine links (simple version using Tavily search) ------
+def get_buy_links(medicine_names):
+    # Returns: {name: url}
+    links = {}
+    for name in medicine_names:
+        try:
+            info = get_medicine_links([name])
+            if info:
+                for item in info:
+                    url = item.get("url", "")
+                    if any(domain in url for domain in ["1mg.com", "pharmeasy", "netmeds"]):
+                        links[name] = url
+                        break
+                else:
+                    links[name] = info[0]["url"]
+        except Exception:
+            links[name] = ""
+    return links
+
+# Health keywords for article relevance filtering
+HEALTH_KEYWORDS = [
+    "health", "medical", "doctor", "hospital", "medicine", "symptom", "diagnosis", 
+    "treatment", "disease", "illness", "condition", "prescription", "wellness",
+    "fitness", "nutrition", "diet", "exercise", "pain", "fever", "cough", "headache",
+    "allergy", "blood pressure", "diabetes", "asthma", "heart", "cancer", "covid",
+    "vaccine", "mental health", "therapy", "pharmacy", "vitamin", "supplement",
+    "pregnancy", "childcare", "elder care", "first aid", "emergency", "recovery",
+    "rehabilitation", "physical therapy", "surgery", "checkup", "test", "scan", "x-ray"
+]
+
+def is_health_related(query):
+    """Check if a query is health-related based on keywords"""
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in HEALTH_KEYWORDS)
+
+# -------- Streamlit session state --------
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "user_id" not in st.session_state:
+    st.session_state["user_id"] = None
+if "username" not in st.session_state:
+    st.session_state["username"] = ""
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = f"{int(time.time())}-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:8]}"
+if "selected_tab" not in st.session_state:
+    st.session_state["selected_tab"] = "💬 Chat Assistant"
+
+if not st.session_state["logged_in"]:
+    st.title("iCuro - Connecting Care, Crossing Barriers")
+    menu = st.columns(2)
+    with menu[0]:
+        if st.button("Login", use_container_width=True):
+            st.session_state["show_login"] = True
+            st.session_state["show_signup"] = False
+    with menu[1]:
+        if st.button("Sign Up", use_container_width=True):
+            st.session_state["show_login"] = False
+            st.session_state["show_signup"] = True
+
+    if st.session_state.get("show_login", True):
+        st.subheader("Login")
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Sign In"):
+            user = login_user(username, password)
+            if user:
+                st.session_state["user_id"] = user.id
+                st.session_state["username"] = user.username
+                st.session_state["logged_in"] = True
+                st.session_state["session_chats"] = []
+                st.session_state["session_id"] = f"{user.id}-{int(time.time())}"
+                st.success(f"Welcome to Curo, {user.username}!")
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+    if st.session_state.get("show_signup", False):
+        st.subheader("Sign Up")
+        username = st.text_input("Username", key="signup_user")
+        password = st.text_input("Password", type="password", key="signup_pass")
+        if st.button("Register"):
+            if username and password:
+                success, message = register_user(username, password)
+                if success:
+                    st.success(message)
+                    st.info("Now you can login to Curo.")
+                    st.session_state["show_login"] = True
+                    st.session_state["show_signup"] = False
+                else:
+                    st.error(message)
+            else:
+                st.warning("Please enter both username and password.")
+
+else:
+    # Sidebar navigation
+    with st.sidebar:
+        st.markdown("🏥 iCuro")
+        st.session_state["selected_tab"] = st.radio(
+            "Menu",
+            [
+                "💬 Chat Assistant",
+                "📄 Prescription Reader",
+                "🧑 Profile",
+                "📊 Feedback Analytics",
+                "🔓 Logout"
+            ],
+            index=0,
+            label_visibility="collapsed"
+        )
+        st.markdown("---")
+        st.caption(f"Logged in as: **{st.session_state['username']}**")
+
+    # Main content area
+    if st.session_state["selected_tab"] == "💬 Chat Assistant":
+        # Session ID header
+        st.markdown(f"""
+        <div class="session-header">
+            <div style="font-size:0.9em;">Session ID</div>
+            <div style="font-weight:bold; font-size:1.1em;">{st.session_state['session_id']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        user = get_user_profile(st.session_state["user_id"])
+        profile_summary = (
+            f"This user is {user.age} years old, gender: {user.gender}. "
+            f"Medical conditions: {user.conditions or 'None'}. "
+            f"Allergies: {user.allergies or 'None'}. "
+            f"Medications: {user.medications or 'None'}."
+        )
+        system_prompt = {
+            "role": "system",
+            "content": (
+                "You are Curo, a concise, friendly, and careful health assistant. "
+                "When greeted with 'hello', 'hi', or similar, respond politely with: "
+                "'Hello, I'm Curo. How can I assist with your health today?' "
+                "Limit your questions to at most 2 if necessary, and keep replies under 4 sentences. "
+                f"User profile: {profile_summary} "
+                "If asked about non-health topics (like news, stocks, politics, sports, etc), reply that you only answer health queries. "
+                "Always tailor advice to the profile and suggest consulting a professional if needed. "
+                "**Never return HTML, code blocks, or markdown code fences in your response. "
+                "Your reply should be plain, readable text only, no HTML or code formatting.**"
+                "Do not include any div, span, or HTML elements in your output."
+            )
+        }
+        conversation_history = load_conversation(st.session_state["user_id"], limit=5)
+        chat_messages = [system_prompt]
+        for c in conversation_history:
+            chat_messages.append({"role": "user", "content": c.message})
+            chat_messages.append({"role": "assistant", "content": c.response})
+
+        if "session_chats" not in st.session_state:
+            st.session_state["session_chats"] = []
+
+        # --- NEW: Clean chat display ---
+        for i, chat in enumerate(st.session_state["session_chats"]):
+        # User message (right aligned, blue bubble)
+
+            assistant_message = clean_assistant_message(str(chat['assistant']))
+
+            st.markdown(
+                f"""
+                <div class="user-message">
+                    <div class="user-bubble">
+                        {chat['user']}
+                    </div>
+                    <div class="timestamp">
+                        {chat['user_time'].strftime("%Y-%m-%d %H:%M:%S")}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        
+        # Assistant message (left aligned, dark bubble)
+            st.markdown(
+                f"""
+                    <div style='text-align:left;'>
+                    <span style='background-color:#2d3748; color:#f0f2f6; border-radius:18px 18px 18px 4px; padding:12px 16px; display:inline-block; margin-bottom:2px; max-width:80%;'>
+                        {assistant_message}
+                    </span>
+                    <br>
+                <span style='color:#777; font-size:0.8em;'>{chat['assistant_time'].strftime("%Y-%m-%d %H:%M:%S")}</span>
+                </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Show articles as clean markdown list only for health-related queries
+            if chat.get("articles") and is_health_related(chat["user"]):
+                st.markdown("#### 📰 Relevant Health Articles")
+                for art in chat["articles"]:
+                    st.markdown(f"- [{art['title']}]({art['url']})")
+                st.markdown("> _Please consult a healthcare professional for personalized advice and guidance._")
+        
+        # Feedback buttons
+            col1, col2 = st.columns([1,1])
+            with col1:
+                if st.button("👍", key=f"thumbs_up_{i}", use_container_width=True, type="secondary", 
+                        help="Positive feedback"):
+                    save_chat_feedback(st.session_state["user_id"], chat['user'], chat['assistant'], 1)
+                    st.success("Thanks for your feedback!")
+            with col2:
+                if st.button("👎", key=f"thumbs_down_{i}", use_container_width=True, type="secondary", 
+                        help="Negative feedback"):
+                    save_chat_feedback(st.session_state["user_id"], chat['user'], chat['assistant'], 0)
+                    st.info("Thanks for your feedback!")
+
+        # --- Chat input at the bottom ---
+        with st.form("chat_form", clear_on_submit=True):
+            chat_input = st.text_input("Ask a health question", key="chat_input_box", 
+                                     placeholder="Type your health question here...")
+            send_btn = st.form_submit_button("Send", use_container_width=True)
+            if send_btn and chat_input.strip():
+                chat_messages.append({"role": "user", "content": chat_input})
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.json') as f:
+                    json.dump(chat_messages, f)
+                    tmp_json_path = f.name
+                
+                # Handle greetings specifically
+                if chat_input.lower().strip() in ["hello", "hi", "hey", "hola", "namaste"]:
+                    result = "Hello, I'm Curo. How can I assist with your health today?"
+                    articles = []
+                else:
+                    with st.spinner("Curo is thinking..."):
+                        try:
+                            result = subprocess.check_output(
+                                ['python', 'cli_groq_chat.py', tmp_json_path, chat_input],
+                                text=True, timeout=30
+                            )
+                            # Only get articles for health-related queries
+                            if is_health_related(chat_input):
+                                articles = get_health_articles(chat_input)
+                            else:
+                                articles = []
+                        except subprocess.TimeoutExpired:
+                            result = "Sorry, I'm taking too long to respond. Please try again."
+                            articles = []
+                        except Exception as e:
+                            result = "Sorry, there was an error. Please try again."
+                            articles = []
+                
+                save_conversation(st.session_state["user_id"], chat_input, result)
+                # Store with timestamps
+                st.session_state["session_chats"].append({
+                    "user": chat_input,
+                    "assistant": result,
+                    "articles": articles,
+                    "user_time": datetime.datetime.now(),
+                    "assistant_time": datetime.datetime.now()
+                })
+                st.rerun()
+
+    elif st.session_state["selected_tab"] == "📄 Prescription Reader":
+        st.subheader("📄 Prescription Reader")
+        st.markdown("Upload a prescription image to extract and understand its contents")
+        
+        uploaded_file = st.file_uploader(
+            "Upload prescription (JPG/PNG under 1MB):",
+            type=["jpg", "jpeg", "png"],
+            label_visibility="collapsed"
+        )
+        
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.read()
+            if len(file_bytes) > 1_000_000:
+                st.warning("Please upload a smaller image (under 1MB) for faster processing.")
+            else:
+                try:
+                    file_bytes_ds = downscale_image(file_bytes)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as imgf:
+                        imgf.write(file_bytes_ds)
+                        temp_img_path = imgf.name
+                except Exception as e:
+                    st.error(f"Image processing error: {e}")
+                    st.stop()
+                    
+                with st.spinner("Analyzing your prescription..."):
+                    try:
+                        result = subprocess.check_output(
+                            ['python', 'cli_gemini_prescription.py', temp_img_path],
+                            text=True, timeout=60
+                        )
+                        st.success("Prescription analysis complete!")
+                        st.markdown("---")
+                        st.markdown("### Prescription Summary")
+                        st.markdown(f'<div class="bot-bubble">{result}</div>', unsafe_allow_html=True)
+
+                        med_names = extract_medicine_names(result)
+                        if med_names:
+                            st.markdown("---")
+                            st.markdown("### Medicine Information")
+                            med_links = get_medicine_links(med_names)
+                            for m in med_links:
+                                st.markdown(f"- **{m['medicine']}**: [{m['title']}]({m['url']})")
+                            
+                            st.markdown("---")
+                            st.markdown("### Purchase Options")
+                            buy_links = get_buy_links(med_names)
+                            if buy_links:
+                                for name, url in buy_links.items():
+                                    if url:
+                                        st.markdown(f"- Buy [{name}]({url})")
+                                    else:
+                                        st.markdown(f"- {name}: Search online for availability")
+                    except subprocess.TimeoutExpired:
+                        st.error("Processing took too long. Please try again with a clearer image.")
+                    except Exception as e:
+                        st.error(f"Could not extract prescription info: {str(e)}")
+
+                st.markdown("---")
+                st.markdown("### Was this analysis helpful?")
+                col1, col2 = st.columns([1,1])
+                with col1:
+                    if st.button("👍 Yes", key="presc_thumbs_up", use_container_width=True):
+                        save_prescription_feedback(st.session_state["user_id"], uploaded_file.name, result, 1)
+                        st.success("Thanks for your feedback!")
+                with col2:
+                    if st.button("👎 No", key="presc_thumbs_down", use_container_width=True):
+                        save_prescription_feedback(st.session_state["user_id"], uploaded_file.name, result, 0)
+                        st.info("Thanks for your feedback!")
+
+    elif st.session_state["selected_tab"] == "🧑 Profile":
+        st.subheader("🧑 Your Health Profile")
+        st.markdown("Keep your health information updated for personalized assistance")
+        
+        user = get_user_profile(st.session_state["user_id"])
+        with st.form("profile_form"):
+            cols = st.columns(2)
+            with cols[0]:
+                age = st.number_input("Age", min_value=1, max_value=120, value=user.age if user.age else 25)
+            with cols[1]:
+                gender_options = ["Male", "Female", "Other", "Prefer not to say"]
+                gender = st.selectbox("Gender", gender_options, 
+                                     index=gender_options.index(user.gender) if user.gender in gender_options else 0)
+            
+            st.markdown("---")
+            conditions = st.text_area("Medical Conditions", value=user.conditions or "", 
+                                    help="E.g., diabetes, asthma, hypertension", 
+                                    placeholder="List any chronic conditions or diagnoses")
+            
+            allergies = st.text_area("Allergies", value=user.allergies or "", 
+                                   help="E.g., penicillin, peanuts, pollen", 
+                                   placeholder="List any allergies or adverse reactions")
+            
+            medications = st.text_area("Current Medications", value=user.medications or "", 
+                                     help="E.g., metformin, aspirin, insulin", 
+                                     placeholder="List medications and dosages")
+            
+            submitted = st.form_submit_button("Update Profile", use_container_width=True)
+            if submitted:
+                update_user_profile(st.session_state["user_id"], age, gender, conditions, allergies, medications)
+                st.success("Profile updated successfully!")
+
+    elif st.session_state["selected_tab"] == "📊 Feedback Analytics":
+        st.subheader("📊 Feedback Analytics")
+        st.markdown("Review user feedback to improve our services")
+        
+        stats = get_feedback_stats()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Chat Feedbacks", stats['chat_total'])
+            st.progress(stats['chat_pos'] / max(1, stats['chat_total']), 
+                       text=f"👍 Positive: {stats['chat_pos']} ({stats['chat_pos']/max(1, stats['chat_total'])*100:.1f}%)")
+            st.progress(stats['chat_neg'] / max(1, stats['chat_total']), 
+                       text=f"👎 Negative: {stats['chat_neg']} ({stats['chat_neg']/max(1, stats['chat_total'])*100:.1f}%)")
+        
+        with col2:
+            st.metric("Total Prescription Feedbacks", stats['presc_total'])
+            st.progress(stats['presc_pos'] / max(1, stats['presc_total']), 
+                       text=f"👍 Positive: {stats['presc_pos']} ({stats['presc_pos']/max(1, stats['presc_total'])*100:.1f}%)")
+            st.progress(stats['presc_neg'] / max(1, stats['presc_total']), 
+                       text=f"👎 Negative: {stats['presc_neg']} ({stats['presc_neg']/max(1, stats['presc_total'])*100:.1f}%)")
+        
+        st.markdown("---")
+        
+        tab1, tab2 = st.tabs(["Chat Feedback", "Prescription Feedback"])
+        
+        with tab1:
+            st.subheader("Recent Chat Feedback")
+            chat_rows = get_recent_chat_feedback(10)
+            for r in chat_rows:
+                st.markdown(f"""
+                <div style='background:var(--bot-bubble); border-radius:10px; padding:15px; margin-bottom:12px;'>
+                    <div style='font-size:0.9em; color:var(--text);'>Q: {r.question}</div>
+                    <div style='margin:8px 0;'>A: {r.answer}</div>
+                    <div style='color:{"#4CAF50" if r.feedback else "#F44336"}; font-weight:bold;'>
+                        {"👍 Positive" if r.feedback else "👎 Negative"}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with tab2:
+            st.subheader("Recent Prescription Feedback")
+            presc_rows = get_recent_presc_feedback(10)
+            for r in presc_rows:
+                st.markdown(f"""
+                <div style='background:var(--bot-bubble); border-radius:10px; padding:15px; margin-bottom:12px;'>
+                    <div style='font-weight:bold;'>{r.filename}</div>
+                    <div style='margin:8px 0; font-size:0.9em;'>{r.result[:150]}...</div>
+                    <div style='color:{"#4CAF50" if r.feedback else "#F44336"}; font-weight:bold;'>
+                        {"👍 Positive" if r.feedback else "👎 Negative"}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    elif st.session_state["selected_tab"] == "🔓 Logout":
+        st.subheader("🔓 Logout")
+        st.markdown("Are you sure you want to log out?")
+        
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            if st.button("Yes, Log Me Out", use_container_width=True, type="primary"):
+                for k in list(st.session_state.keys()):
+                    del st.session_state[k]
+                st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### We'd love your feedback!")
+        st.markdown("Please consider sharing your experience with us:")
+        feedback = st.text_area("Your feedback", placeholder="What did you like? What can we improve?")
+        if st.button("Submit Feedback", use_container_width=True):
+            st.success("Thank you for your feedback! It helps us improve Curo.")
