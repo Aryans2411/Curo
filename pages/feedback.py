@@ -9,15 +9,14 @@ from datetime import datetime, timedelta
 st.set_page_config("Feedback Analytics", layout="wide", page_icon="📊")
 init_db()
 
-# Define dynamic color scheme that works in both light and dark modes
 COLORS = {
-    "positive": "#4CAF50",  # Green
-    "negative": "#F44336",  # Red
-    "chat": "#2196F3",      # Blue
-    "prescription": "#FF9800",  # Orange
+    "positive": "#4CAF50",
+    "negative": "#F44336",
+    "chat": "#2196F3",
+    "prescription": "#FF9800",
     "background": "var(--background-color)",
     "text": "var(--text-color)",
-    "header": "#9C27B0",    # Purple
+    "header": "#9C27B0",
     "card": "var(--card-background-color)"
 }
 
@@ -48,7 +47,6 @@ def make_df(feedback, kind="chat"):
 def user_map(users):
     return {u.id: u.username for u in users}
 
-# --- Data load ---
 chat, presc, users = fetch_feedback()
 if not chat and not presc:
     st.warning("No feedback data found yet.")
@@ -70,13 +68,11 @@ df["feedback_type"] = df["feedback"].apply(lambda x: "positive" if x else "negat
 st.title("📊 Chatbot & Prescription Feedback Dashboard")
 st.markdown("**Track user feedback and model performance metrics**")
 
-# --- Summary Cards ---
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Total Feedbacks", len(df), help="All feedback entries collected")
+    st.metric("Total Feedbacks", len(df))
 with col2:
-    st.metric("👍 Positive Rate", f"{100*df['feedback'].mean():.1f}%", 
-             help="Percentage of positive feedback")
+    st.metric("👍 Positive Rate", f"{100*df['feedback'].mean():.1f}%")
 with col3:
     st.metric("💬 Chat Feedbacks", len(chat_df), 
              delta=f"{len(chat_df)/len(df)*100:.1f}% of total" if len(df) > 0 else "0%")
@@ -86,11 +82,9 @@ with col4:
 
 st.markdown("---")
 
-# --- Main Columns ---
 main_col1, main_col2 = st.columns([1, 1])
 
 with main_col1:
-    # Feedback Distribution by Type
     st.subheader("Feedback Distribution by Type")
     type_fig = px.pie(
         df, 
@@ -109,7 +103,6 @@ with main_col1:
     )
     st.plotly_chart(type_fig, use_container_width=True)
     
-    # Weekly Feedback Trend
     st.subheader("Weekly Feedback Trend")
     weekly = df.groupby(['week', 'feedback_type', 'type']).size().reset_index(name='count')
     if not weekly.empty:
@@ -138,7 +131,6 @@ with main_col1:
         st.info("No data available for weekly trends")
 
 with main_col2:
-    # Feedback Sentiment Analysis
     st.subheader("Feedback Sentiment")
     sentiment_fig = px.sunburst(
         df,
@@ -158,7 +150,6 @@ with main_col2:
     )
     st.plotly_chart(sentiment_fig, use_container_width=True)
     
-    # Feedback by User
     st.subheader("Feedback by User")
     user_feedback = df.groupby(['username', 'feedback_type']).size().unstack(fill_value=0)
     user_feedback['total'] = user_feedback.sum(axis=1)
@@ -196,7 +187,6 @@ with main_col2:
 st.markdown("---")
 st.header("Detailed Feedback Analysis")
 
-# --- Tabs for Detailed View ---
 tab1, tab2 = st.tabs(["💬 Chat Feedback", "💊 Prescription Feedback"])
 
 with tab1:
@@ -307,17 +297,14 @@ with tab2:
     else:
         st.info("No prescription feedback available")
 
-# Apply dynamic styling that works with dark mode
 st.markdown(f"""
 <style>
-    /* Use Streamlit's theme variables */
     :root {{
         --background-color: var(--background-color);
         --text-color: var(--text-color);
         --card-background-color: var(--secondary-background-color);
     }}
     
-    /* Metric cards */
     [data-testid="stMetric"] {{
         background-color: var(--card-background-color);
         border-radius: 12px;
@@ -333,7 +320,6 @@ st.markdown(f"""
         color: var(--text-color) !important;
     }}
     
-    /* Tabs */
     [data-baseweb="tab"] {{
         background-color: var(--card-background-color) !important;
         border-radius: 8px !important;
@@ -348,7 +334,6 @@ st.markdown(f"""
         font-weight: bold;
     }}
     
-    /* Dataframes */
     .dataframe {{
         background-color: var(--card-background-color) !important;
         color: var(--text-color) !important;
@@ -356,18 +341,15 @@ st.markdown(f"""
         border: 1px solid var(--border-color);
     }}
     
-    /* Table text color */
     .dataframe th, .dataframe td {{
         color: var(--text-color) !important;
     }}
     
-    /* Dividers */
     hr {{
         margin: 2rem 0;
         border-top: 2px solid {COLORS['prescription']};
     }}
     
-    /* Plotly chart background */
     .js-plotly-plot .plotly {{
         background: transparent !important;
     }}
